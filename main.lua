@@ -1,5 +1,5 @@
 --[[
-Town Names NML Generator, v1.0.0 (2026-01-31)
+Town Names NML Generator, v1.1.0 (2026-02-01)
 https://github.com/chujo-chujo/Town-Names-NML-Generator
 Author: chujo
 License: CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)
@@ -41,7 +41,6 @@ local lfs = require "lfs"
 math.randomseed(os.time())
 
 
-
 -- Forward declaration, global variables
 lfs.chdir("..")
 local default_path = lfs.currentdir()
@@ -49,7 +48,6 @@ local last_folder = default_path
 
 local matrix_tabs = iup.tabs{showclose = "NO"}
 local current_matrix
-local dlg = iup.dialog{}
 
 local parts_probs = {}
 local table_of_matrices = {}
@@ -89,14 +87,14 @@ end
 
 
 local function generate_random_string(length)
-    local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    local result = {}
-    for i = 1, length do
-        local index = math.random(1, tonumber(#chars))
-        table.insert(result, chars:sub(index, index))
-    end
-    
-    return table.concat(result)
+	local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	local result = {}
+	for i = 1, length do
+		local index = math.random(1, tonumber(#chars))
+		table.insert(result, chars:sub(index, index))
+	end
+	
+	return table.concat(result)
 end
 
 local function parse_csv_string(csv_string)
@@ -179,7 +177,7 @@ end
 
 local function remove_list()
 	if tonumber(matrix_tabs.count) == 1 then
-			return iup.DEFAULT
+		clear_list()
 	else
 		local current_tab_index = tonumber(matrix_tabs.valuepos)
 		iup.Destroy(iup.GetChild(matrix_tabs, current_tab_index))
@@ -194,7 +192,7 @@ local function close_app()
 		"QUESTION",
 		"", 
 		"  Are you sure you want to exit?", 
-		"OKCANCEL")
+		"YESNO")
 	if response == 1 then
 		return true
 	else
@@ -316,7 +314,7 @@ local function get_parts_probs(dlg)
 	dlg_parts:popup(iup.CENTERPARENT, iup.CENTERPARENT)
 end
 
-local function generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_url, only_NML)
+local function generate_NML(grfid, version, min_comp_version, grf_name, grf_menu, grf_desc, grf_url, only_NML)
 	-- Check missign parameters
 	if not grfid or trim(grfid) == "" then
 		show_message("WARNING", "Missing GRFID", "  Grf ID is a mandatory parameter.", "OK")
@@ -326,14 +324,13 @@ local function generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_ur
 		show_message("WARNING", "Missing version", "  Version number is a mandatory parameter.", "OK")
 		return false
 	end
-	-- if not min_comp_version or min_comp_version == "" then
-	-- 	show_message("WARNING", "Missing min. comp. version", "  Minimal compatible version number is a mandatory parameter.", "OK")
-	-- 	return
-	-- end
-	-- if tonumber(version) < tonumber(min_comp_version) then
-	-- 	show_message("WARNING", "", "  'Version' number has to be greater than or equal to\n  'minimal compatible version' number.", "OK")
-	-- 	return
-	-- end
+	if not min_comp_version or min_comp_version == "" then
+		min_comp_version = "0"
+	end
+	if tonumber(version) < tonumber(min_comp_version) then
+		show_message("WARNING", "", "  'Version' number must be greater than or equal to\n  'Minimum compatible version' number.", "OK")
+		return
+	end
 	if not grf_name or trim(grf_name) == "" then
 		show_message("WARNING", "Missing NewGRF name", "  NewGRF name is a mandatory parameter.", "OK")
 		return false
@@ -363,6 +360,7 @@ local function generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_ur
 		table.insert(table_of_matrices, read_matrix_data(iup.GetChild(matrix_tabs, i)))
 	end
 
+	-- Grf headere --------------------------------------------------------------
 
 	local header = string.format(
 		'grf {\n' ..
@@ -372,26 +370,88 @@ local function generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_ur
 		'    url: string(STR_GRF_URL);\n' ..
 		'    version: %s;\n' ..
 		'    min_compatible_version: %s;\n' ..
-		'}\n\n', grfid, version, version)
+		'}\n\n', grfid, version, min_comp_version)
 
+
+	-- Town names blocks --------------------------------------------------------------
 
 	local list_town_names = {}
-	for i, part in ipairs(table_of_matrices) do
-		local block_name = string.char(string.byte("A") + (i-1))
-		table.insert(list_town_names, string.format("town_names(%s) {\n    {\n", block_name))
-		for _, k in ipairs(part) do
-			table.insert(list_town_names, string.format('        text("%s", %s),\n', k.name, k.prob))
-		end
-		table.insert(list_town_names, "    }\n}\n\n")
-	end
-	list_town_names = table.concat(list_town_names, "")
 
+	local function to_roman(num)
+		local map = {
+			{1000, "M"}, {900, "CM"}, {500, "D"}, {400, "CD"},
+			{100, "C"},  {90, "XC"},  {50, "L"},  {40, "XL"},
+			{10, "X"},   {9, "IX"},   {5, "V"},   {4, "IV"},
+			{1, "I"}
+		}
+		
+		local result = ""
+		for _, pair in ipairs(map) do
+			while num >= pair[1] do
+				result = result .. pair[2]
+				num = num - pair[1]
+			end
+		end
+		return result
+	end
+
+	local function town_names_block(name, items)
+		table.insert(list_town_names, string.format("town_names(%s) {", name))
+		table.insert(list_town_names, "    {")
+		for _, townname in ipairs(items) do
+			table.insert(list_town_names, string.format('        text("%s", %s),', townname.name, townname.prob))
+		end
+		table.insert(list_town_names, "    }")
+		table.insert(list_town_names, "}\n")
+	end
+
+	for i, part in ipairs(table_of_matrices) do
+		local block_name = "part" .. i
+
+		-- List <= 255 can be just added
+		if #part <= 255 then
+			town_names_block(block_name, part)
+			goto continue
+		end
+
+		-- List > 255 needs to be split into subblocks of 255 length
+		local subblock_names = {}
+		local subblock_index = 0
+
+		for i = 1, #part, 255 do
+			subblock_index = subblock_index + 1
+			local subblock_name = to_roman(subblock_index)
+			local subblock = {}
+
+			for j = i, math.min(i + 254, #part) do
+				table.insert(subblock, part[j])
+			end
+
+			local full_name = block_name .. subblock_name
+			subblock_names[#subblock_names + 1] = full_name
+			town_names_block(full_name, subblock)
+		end
+
+		-- Parent block for subblocks
+		table.insert(list_town_names, string.format("town_names(%s) {", block_name))
+		table.insert(list_town_names, "    {")
+		for _, name in ipairs(subblock_names) do
+			table.insert(list_town_names, string.format("        town_names(%s, 1),", name))
+		end
+		table.insert(list_town_names, "    }")
+		table.insert(list_town_names, "}\n")
+
+		::continue::
+	end
+	list_town_names = table.concat(list_town_names, "\n")
+
+
+	-- Top block --------------------------------------------------------------
 
 	local top_names_block = {"\ntown_names {\n    styles: string(STR_MENU);\n"}
 	for i, v in ipairs(parts_probs) do
 		table.insert(top_names_block,
-			string.format("    {\n        town_names(%s, %s)\n    }\n",
-				string.char(string.byte("A") + (i-1)), parts_probs[i]))
+			string.format("    {\n        town_names(%s, %s)\n    }\n",	"part" .. i, parts_probs[i]))
 	end
 	table.insert(top_names_block, "}")
 	top_names_block = table.concat(top_names_block, "")
@@ -431,8 +491,8 @@ local function generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_ur
 	return NML_filename_stem
 end
 
-local function compile(grfid, version, grf_name, grf_menu, grf_desc, grf_url)
-	local NML_filename_stem = generate_NML(grfid, version, grf_name, grf_menu, grf_desc, grf_url, false)
+local function compile(grfid, version, min_comp_version, grf_name, grf_menu, grf_desc, grf_url)
+	local NML_filename_stem = generate_NML(grfid, version, min_comp_version, grf_name, grf_menu, grf_desc, grf_url, false)
 	if not NML_filename_stem then
 		return iup.DEFAULT
 	end
@@ -551,7 +611,7 @@ local function build_gui()
 	local dlg_height = 727
 
 	dlg = iup.dialog{
-		title = "Town Names NML Generator",
+		title = "Town Names NML Generator v1.1.0",
 		rastersize = dlg_width .. "x" .. dlg_height,
 		resize = "NO",
 		maxbox = "NO",
@@ -573,19 +633,18 @@ local function build_gui()
 
 	-- #### GRF PARAMETERS ###########################################################################################
 
-	local textbox_width  = "123x"
 	local cy_first_line  = 10
 	local cy_second_line = 40
 	local cy_third_line  = 70
 	local cy_fourth_line = 100
 	local cy_fifth_line  = 130
 
-	local label_grfid = iup.label{title = "Grf ID*:"}
+	local label_grfid = iup.label{title = "Grf ID*:", tip = "Four-byte string\n(can use escaped bytes)"}
 	-- iup.SetAttribute(label_grfid, "FONTSTYLE", "Bold")
 	local text_grfid = iup.text{
 		mask = "[A-Z0-9\\]+",
 		NC = 12,
-		rastersize = textbox_width,
+		rastersize = "90x",
 		tip = "Four-byte string\n(can use escaped bytes)"
 	}
 	local label_version = iup.label{title = "Version*:"}
@@ -596,21 +655,21 @@ local function build_gui()
 		spin = "YES",
 		spinmin = "0",
 		spininc = "1",
-		rastersize = textbox_width
+		rastersize = "40x"
 	}
-	-- local label_min_comp_version = iup.label{title = "Min. comp. version:"}
-	-- local text_min_comp_version = iup.text{
-	-- 	mask = "/d+",
-	-- 	value = "1",
-	-- 	spin = "YES",
-	-- 	spinmin = "0",
-	-- 	spininc = "1",
-	-- 	rastersize = textbox_width
-	-- }
-	local label_grf_name = iup.label{title = "NewGRF name*:"}
+	local label_min_comp_version = iup.label{title = "Min. ver.*:", tip = "Minimum compatible version\nYou "}
+	local text_min_comp_version = iup.text{
+		mask = "/d+",
+		value = "1",
+		spin = "YES",
+		spinmin = "0",
+		spininc = "1",
+		rastersize = "40x"
+	}
+	local label_grf_name = iup.label{title = "NewGRF name*:", tip = 'Name displayed in "NewGRF Settings"'}
 	-- iup.SetAttribute(label_grf_name, "FONTSTYLE", "Bold")
 	local text_grf_name  = iup.text{rastersize = "303x", tip = 'Name displayed in "NewGRF Settings"'}
-	local label_grf_menu = iup.label{title = "Menu label*:"}
+	local label_grf_menu = iup.label{title = "Menu label*:", tip = 'Label displayed in "World Generation"'}
 	-- iup.SetAttribute(label_grf_menu, "FONTSTYLE", "Bold")
 	local text_grf_menu  = iup.text{rastersize = "324x", tip = 'Label displayed in "World Generation"'}
 	local label_grf_url  = iup.label{title = "NewGRF url:"}
@@ -633,16 +692,17 @@ local function build_gui()
 	label_grfid.cy = cy_first_line
 	text_grfid.cx = 56
 	text_grfid.cy = cy_first_line - 2
-	btn_random_grfid.cx = 179
+	btn_random_grfid.cx = 146
 	btn_random_grfid.cy = cy_first_line - 4
-	label_version.cx = 230
+
+	label_version.cx = 192
 	label_version.cy = cy_first_line
-	text_version.cx = 286
+	text_version.cx = 246
 	text_version.cy = cy_first_line - 2
-	-- label_min_comp_version.cx = 430
-	-- label_min_comp_version.cy = cy_first_line
-	-- text_min_comp_version.cx = 548
-	-- text_min_comp_version.cy = cy_first_line - 2
+	label_min_comp_version.cx = 309
+	label_min_comp_version.cy = cy_first_line
+	text_min_comp_version.cx = 369
+	text_min_comp_version.cy = cy_first_line - 2
 
 	label_grf_name.cx = 10
 	label_grf_name.cy = cy_second_line
@@ -652,15 +712,16 @@ local function build_gui()
 	label_grf_menu.cy = cy_third_line
 	text_grf_menu.cx = 85
 	text_grf_menu.cy = cy_third_line - 2
-	label_grf_url.cx = 10
-	label_grf_url.cy = cy_fourth_line
-	text_grf_url.cx = 85
-	text_grf_url.cy = cy_fourth_line - 2
 	
 	label_grf_desc.cx = 10
-	label_grf_desc.cy = cy_fifth_line
-	text_grf_desc.cx = 132-47
-	text_grf_desc.cy = cy_fifth_line - 2
+	label_grf_desc.cy = cy_fourth_line
+	text_grf_desc.cx = 85
+	text_grf_desc.cy = cy_fourth_line - 2
+
+	label_grf_url.cx = 10
+	label_grf_url.cy = cy_fifth_line
+	text_grf_url.cx = 85
+	text_grf_url.cy = cy_fifth_line - 2
 
 	local frame_header = iup.frame{
 		iup.cbox{
@@ -669,8 +730,8 @@ local function build_gui()
 			btn_random_grfid,
 			label_version,
 			text_version,
-			-- label_min_comp_version,
-			-- text_min_comp_version,
+			label_min_comp_version,
+			text_min_comp_version,
 			label_grf_name,
 			text_grf_name,
 			label_grf_menu,
@@ -732,7 +793,7 @@ local function build_gui()
 		imageposition = "TOP",
 		rastersize = "53x57",
 		action = function()
-			generate_NML(text_grfid.value, text_version.value, text_grf_name.value, text_grf_menu.value, text_grf_desc.value, text_grf_url.value, true)
+			generate_NML(text_grfid.value, text_version.value, text_min_comp_version.value, text_grf_name.value, text_grf_menu.value, text_grf_desc.value, text_grf_url.value, true)
 			return iup.DEFAULT
 		end,
 		canfocus = "NO",
@@ -744,7 +805,7 @@ local function build_gui()
 		imageposition = "TOP",
 		rastersize = "53x75",
 		action = function()
-			compile(text_grfid.value, text_version.value, text_grf_name.value, text_grf_menu.value, text_grf_desc.value, text_grf_url.value)
+			compile(text_grfid.value, text_version.value, text_min_comp_version.value, text_grf_name.value, text_grf_menu.value, text_grf_desc.value, text_grf_url.value)
 			return iup.DEFAULT
 		end,
 		canfocus = "NO",
